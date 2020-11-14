@@ -115,18 +115,24 @@ def parse_args():
     )
 
     b2s_parser.add_argument(
-        "-a", "--arch",
-        choices=[32, 64],
-        type=int,
-        default=64,
-        help="Architecture of the program."
+        "-n", "--no-x86",
+        help="Indicates that architecture is not x86",
+        action="store_true",
     )
 
     b2s_parser.add_argument(
-        "-m", "--malloc",
-        action="store_true",
-        help="Display malloc size instead of chunk size.",
-        dest="use_malloc_size",
+        "-b", "--bits",
+        choices=[32, 64],
+        type=int,
+        default=64,
+        help="Bits of the program."
+    )
+
+    b2s_parser.add_argument(
+        "-g", "--glibc",
+        type=int,
+        default=19,
+        help="Minor version of the glibc 2."
     )
 
     b2s_parser.add_argument(
@@ -170,14 +176,6 @@ def parse_args():
     else:
         args.arch = X86
 
-    if args.bits == 64:
-        args.align = 16
-    else:
-        if args.arch == X86 and args.glibc >= 26:
-            args.align = 16
-        else:
-            args.align = 8
-
     return args
 
 
@@ -194,27 +192,30 @@ def dec_or_hex_int(v: str):
 def main():
     args = parse_args()
     init_log(args.v)
-    arch = args.arch
+
+    config = HeapConfig(
+        bits=args.bits,
+        arch=args.arch,
+        libc_version=args.glibc
+    )
 
     if args.command == "c2m":
         targets = args.size
         command_func = partial(
             chunk_2_malloc_size,
-            bits=args.bits,
-            align=args.align,
+            config=config,
         )
     elif args.command == "m2c":
         targets = args.size
         command_func = partial(
             malloc_2_chunk_size,
-            bits=args.bits,
-            align=args.align,
+            config=config,
         )
     elif args.command == "b2s":
         targets = args.bin
         command_func = partial(
             bin_2_chunk_size,
-            arch=arch,
+            config=config,
             use_malloc_size=args.use_malloc_size,
         )
     else:
@@ -224,15 +225,43 @@ def main():
         command_func(target)
 
 
-def bin_2_chunk_size(bin_id: str, arch: int, use_malloc_size: bool):
+class HeapConfig:
+
+    def __init__(self, bits, arch, libc_version):
+        self.bits = bits
+        self.arch = arch
+        self.libc_version = libc_version
+
+        if bits == 64:
+            self.align = 16
+            self.small_bins_count = 62
+        else:
+            if arch == X86 and libc_version >= 26:
+                self.align = 16
+                self.small_bins_count = 63
+            else:
+                self.align = 8
+                self.small_bins_count = 62
+
+        self.min_chunk_size = bits//2
+
+        self.large_bins_count = 126 - self.small_bins_count
+        self.start_large_index = self.small_bins_count + 2
+
+
+def bin_2_chunk_size(
+        bin_id: str,
+        config: HeapConfig,
+        use_malloc_size: bool
+):
     try:
-        bin_type, bin_index = parse_bin_id(bin_id, arch)
+        bin_type, bin_index = parse_bin_id(bin_id, config)
     except ValueError as ex:
         logger.warning(ex)
         return
 
     if bin_type in ["tcache", "small", "fast"]:
-        min_size = arch // 2
+        min_size = config.min_chunk_size
         bin_min_size = min_size + 0x10 * (bin_index - 1)
         bin_max_size = bin_min_size
 
@@ -280,57 +309,39 @@ def bin_2_chunk_size(bin_id: str, arch: int, use_malloc_size: bool):
         print("%s 0x%x-0x%x" % (bin_id, bin_min_size, bin_max_size))
 
 
-def parse_bin_id(bin_id: str, arch: int) -> (str, int):
+def parse_bin_id(
+        bin_id: str,
+        config: HeapConfig,
+) -> (str, int):
     if bin_id == "u":
         return "unsorted", 0
 
     try:
         if bin_id.startswith("s"):
-            bin_type = "small"
-            bin_index = bin_id[1:]
-            if arch == 64:
-                max_index = COUNT_SMALL_BINS_64
-            else:
-                max_index = COUNT_SMALL_BINS_32
-
-            bin_index = _parse_bin_index(bin_id[1:], max_index)
-            return bin_type, bin_index
+            bin_index = _parse_bin_index(bin_id[1:], config.small_bins_count)
+            return "small", bin_index
 
         elif bin_id.startswith("l"):
-            bin_type = "large"
-            if arch == 64:
-                max_index = COUNT_LARGE_BINS_64
-            else:
-                max_index = COUNT_LARGE_BINS_32
-
-            bin_index = _parse_bin_index(bin_id[1:], max_index)
-            return bin_type, bin_index
+            bin_index = _parse_bin_index(bin_id[1:], config.large_bins_count)
+            return "large", bin_index
 
         elif bin_id.startswith("b"):
-            bin_type = ""
             bin_index = _parse_bin_index(bin_id[1:], COUNT_DOUBLE_BINS)
-
-            if arch == 64:
-                start_large_index = 64
-            else:
-                start_large_index = 65
 
             if bin_index == 1:
                 return "unsorted", 0
-            elif bin_index < start_large_index:
+            elif bin_index < config.start_large_index:
                 return "small", bin_index - 1
             else:
-                return "large", bin_index - start_large_index + 1
+                return "large", bin_index - config.start_large_index + 1
 
         elif bin_id.startswith("f"):
-            bin_type = "fast"
             bin_index = _parse_bin_index(bin_id[1:], COUNT_FASTBINS)
-            return bin_type, bin_index
+            return "fast", bin_index
 
         elif bin_id.startswith("t"):
-            bin_type = "tcache"
             bin_index = _parse_bin_index(bin_id[1:], COUNT_TCACHES)
-            return bin_type, bin_index
+            return "tcache", bin_index
 
     except ValueError:
         raise ValueError("Invalid bin '%s'" % bin_id)
@@ -346,13 +357,15 @@ def _parse_bin_index(bin_index: str, max_index: int):
     return bin_index
 
 
-def chunk_2_malloc_size(chunk_size: int, bits: int, align: int):
+def chunk_2_malloc_size(
+        chunk_size: int,
+        config: HeapConfig,
+):
     try:
         chunk_size = dec_or_hex_int(chunk_size)
         (min_size, max_size) = calc_malloc_size(
             chunk_size,
-            bits=bits,
-            align=align,
+            config=config,
         )
     except ValueError as ex:
         logger.warning(ex)
@@ -363,31 +376,27 @@ def chunk_2_malloc_size(chunk_size: int, bits: int, align: int):
 
 def calc_malloc_size(
         chunk_size: int,
-        bits: int,
-        align: str
+        config: HeapConfig,
 ) -> (int, int):
 
-    size_mul = bits//32
-    min_size = align * size_mul
-
-    if chunk_size < min_size:
+    if chunk_size < config.min_chunk_size:
         raise ValueError(
             "Invalid chunk size 0x%x for %d bits: Too small" % (
-                chunk_size, bits
+                chunk_size, config.bits
             )
         )
 
     chunk_size = remove_chunk_size_flags(chunk_size)
 
-    if chunk_size % align != 0:
+    if chunk_size % config.align != 0:
         raise ValueError(
             "Invalid chunk size 0x%x: Not aligned with %d" % (
-                chunk_size, align
+                chunk_size, config.align
             )
         )
 
-    max_size = chunk_size - (4 * size_mul)
-    min_size = max_size - (align - 1)
+    max_size = chunk_size - (config.bits//8)
+    min_size = max_size - (config.align - 1)
 
     if min_size < 10:
         min_size = 0
@@ -399,7 +408,10 @@ def remove_chunk_size_flags(chunk_size: int) -> int:
     return chunk_size & ~0x7
 
 
-def malloc_2_chunk_size(malloc_size: int, bits: int, align: int):
+def malloc_2_chunk_size(
+        malloc_size: int,
+        config: HeapConfig,
+):
     try:
         malloc_size = dec_or_hex_int(malloc_size)
     except ValueError as ex:
@@ -408,32 +420,28 @@ def malloc_2_chunk_size(malloc_size: int, bits: int, align: int):
 
     chunk_size = calc_chunk_size(
         malloc_size,
-        bits=bits,
-        align=align,
+        config=config,
     )
     print("0x%x 0x%x" % (malloc_size, chunk_size))
 
 
 def calc_chunk_size(
         malloc_size: int,
-        bits: int,
-        align: int,
+        config: HeapConfig,
 ) -> int:
 
-    if bits == 64:
+    if config.bits == 64:
         x = -9
-        min_size = 0x20
     else:
-        min_size = 0x10
-
-        if align == 16:
+        if config.align == 16:
             x = 3
         else:
             x = -5
 
-    chunk_size = ((malloc_size+x)//align)*align+min_size
+    chunk_size = ((malloc_size+x)//config.align) * \
+        config.align + config.min_chunk_size
 
-    return max(chunk_size, min_size)
+    return max(chunk_size, config.min_chunk_size)
 
 
 def size_2_bins(chunk_size: int, arch: int):
