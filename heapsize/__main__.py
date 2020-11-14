@@ -14,6 +14,8 @@ COUNT_LARGE_BINS_32 = 63
 COUNT_LARGE_BINS_64 = 64
 COUNT_DOUBLE_BINS = 127
 
+X86 = "x86"
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -35,18 +37,24 @@ def parse_args():
     )
 
     m2c_parser.add_argument(
-        "-f", "--format",
-        help="Output format string.",
-        choices=["d", "dec", "h", "hex", "hexa"],
-        default="h"
+        "-n", "--no-x86",
+        help="Indicates that architecture is not x86",
+        action="store_true",
     )
 
     m2c_parser.add_argument(
-        "-a", "--arch",
+        "-b", "--bits",
         choices=[32, 64],
         type=int,
         default=64,
-        help="Architecture of the program."
+        help="Bits of the program."
+    )
+
+    m2c_parser.add_argument(
+        "-g", "--glibc",
+        type=int,
+        default=19,
+        help="Minor version of the glibc 2."
     )
 
     m2c_parser.add_argument(
@@ -68,18 +76,24 @@ def parse_args():
     )
 
     c2m_parser.add_argument(
-        "-f", "--format",
-        help="Output format string.",
-        choices=["d", "dec", "h", "hex", "hexa"],
-        default="h"
+        "-n", "--no-x86",
+        help="Indicates that architecture is not x86",
+        action="store_true",
     )
 
     c2m_parser.add_argument(
-        "-a", "--arch",
+        "-b", "--bits",
         choices=[32, 64],
         type=int,
         default=64,
-        help="Architecture of the program."
+        help="Bits of the program."
+    )
+
+    c2m_parser.add_argument(
+        "-g", "--glibc",
+        type=int,
+        default=19,
+        help="Minor version of the glibc 2."
     )
 
     c2m_parser.add_argument(
@@ -151,6 +165,19 @@ def parse_args():
     except AttributeError:
         pass
 
+    if args.no_x86:
+        args.arch = "other"
+    else:
+        args.arch = X86
+
+    if args.bits == 64:
+        args.align = 16
+    else:
+        if args.arch == X86 and args.glibc >= 26:
+            args.align = 16
+        else:
+            args.align = 8
+
     return args
 
 
@@ -173,15 +200,15 @@ def main():
         targets = args.size
         command_func = partial(
             chunk_2_malloc_size,
-            arch=arch,
-            print_format=args.format
+            bits=args.bits,
+            align=args.align,
         )
     elif args.command == "m2c":
         targets = args.size
         command_func = partial(
             malloc_2_chunk_size,
-            arch=arch,
-            print_format=args.format
+            bits=args.bits,
+            align=args.align,
         )
     elif args.command == "b2s":
         targets = args.bin
@@ -319,36 +346,48 @@ def _parse_bin_index(bin_index: str, max_index: int):
     return bin_index
 
 
-def chunk_2_malloc_size(chunk_size: int, arch: int, print_format: str):
+def chunk_2_malloc_size(chunk_size: int, bits: int, align: int):
     try:
         chunk_size = dec_or_hex_int(chunk_size)
-        (min_size, max_size) = calc_malloc_size(chunk_size, arch=arch)
+        (min_size, max_size) = calc_malloc_size(
+            chunk_size,
+            bits=bits,
+            align=align,
+        )
     except ValueError as ex:
         logger.warning(ex)
         return
 
-    if print_format.startswith("h"):
-        format_str = "0x%x 0x%x-0x%x"
-    else:
-        format_str = "%d %d-%d"
-    print(format_str % (chunk_size, min_size, max_size))
+    print("0x%x 0x%x-0x%x" % (chunk_size, min_size, max_size))
 
 
-def calc_malloc_size(chunk_size: int, arch: int) -> (int, int):
-    size_mul = arch//32
-    min_size = 0x10 * size_mul
+def calc_malloc_size(
+        chunk_size: int,
+        bits: int,
+        align: str
+) -> (int, int):
+
+    size_mul = bits//32
+    min_size = align * size_mul
 
     if chunk_size < min_size:
         raise ValueError(
-            "Invalid chunk size 0x%x for arch %d: Too small" % (
-                chunk_size, arch
+            "Invalid chunk size 0x%x for %d bits: Too small" % (
+                chunk_size, bits
             )
         )
 
     chunk_size = remove_chunk_size_flags(chunk_size)
 
+    if chunk_size % align != 0:
+        raise ValueError(
+            "Invalid chunk size 0x%x: Not aligned with %d" % (
+                chunk_size, align
+            )
+        )
+
     max_size = chunk_size - (4 * size_mul)
-    min_size = max_size - 15
+    min_size = max_size - (align - 1)
 
     if min_size < 10:
         min_size = 0
@@ -360,32 +399,39 @@ def remove_chunk_size_flags(chunk_size: int) -> int:
     return chunk_size & ~0x7
 
 
-def malloc_2_chunk_size(malloc_size: int, arch: int, print_format: str):
+def malloc_2_chunk_size(malloc_size: int, bits: int, align: int):
     try:
         malloc_size = dec_or_hex_int(malloc_size)
     except ValueError as ex:
         logger.warning(ex)
         return
 
-    chunk_size = calc_chunk_size(malloc_size, arch=arch)
+    chunk_size = calc_chunk_size(
+        malloc_size,
+        bits=bits,
+        align=align,
+    )
+    print("0x%x 0x%x" % (malloc_size, chunk_size))
 
-    if print_format.startswith("h"):
-        format_str = "0x%x 0x%x"
-    else:
-        format_str = "%d %d"
-    print(format_str % (malloc_size, chunk_size))
 
+def calc_chunk_size(
+        malloc_size: int,
+        bits: int,
+        align: int,
+) -> int:
 
-def calc_chunk_size(malloc_size: int, arch: int = 64) -> int:
-
-    if arch == 64:
+    if bits == 64:
         x = -9
         min_size = 0x20
     else:
-        x = 3
         min_size = 0x10
 
-    chunk_size = ((malloc_size+x)//16)*16+min_size
+        if align == 16:
+            x = 3
+        else:
+            x = -5
+
+    chunk_size = ((malloc_size+x)//align)*align+min_size
 
     return max(chunk_size, min_size)
 
