@@ -27,18 +27,18 @@ def parse_args():
 
     m2c_parser = cmd_parsers.add_parser(
         "m2c",
-        help="Converts malloc size into a chunk size"
+        help="Malloc size to Chunk size"
     )
 
     m2c_parser.add_argument(
         "size",
-        help="Size of the chunk to calculate",
+        help="Chunk size.",
         nargs="*",
     )
 
     m2c_parser.add_argument(
         "-n", "--no-x86",
-        help="Indicates that architecture is not x86",
+        help="Architecture is not x86.",
         action="store_true",
     )
 
@@ -47,7 +47,7 @@ def parse_args():
         choices=[32, 64],
         type=int,
         default=64,
-        help="Bits of the program."
+        help="Program bits."
     )
 
     m2c_parser.add_argument(
@@ -66,7 +66,7 @@ def parse_args():
 
     c2m_parser = cmd_parsers.add_parser(
         "c2m",
-        help="Converts chunk size into the malloc size range"
+        help="Chunk size to Malloc size range"
     )
 
     c2m_parser.add_argument(
@@ -133,6 +133,13 @@ def parse_args():
         type=int,
         default=19,
         help="Minor version of the glibc 2."
+    )
+
+    b2s_parser.add_argument(
+        "-m", "--malloc",
+        action="store_true",
+        help="Display malloc size instead of chunk size.",
+        dest="use_malloc_size",
     )
 
     b2s_parser.add_argument(
@@ -262,10 +269,11 @@ def bin_2_chunk_size(
 
     if bin_type in ["tcache", "small", "fast"]:
         min_size = config.min_chunk_size
-        bin_min_size = min_size + 0x10 * (bin_index - 1)
+        bin_min_size = min_size + config.align * (bin_index - 1)
         bin_max_size = bin_min_size
 
     elif bin_type == "large":
+        # range 64 bytes
         if bin_index < 34:
             min_size = 0x400
             bin_min_size = min_size + 0x40 * (bin_index - 1)
@@ -297,8 +305,8 @@ def bin_2_chunk_size(
         raise NotImplementedError("Unreachable code: bin type '%s'" % bin_type)
 
     if use_malloc_size:
-        min_min_size, min_max_size = calc_malloc_size(bin_min_size, arch)
-        max_min_size, max_max_size = calc_malloc_size(bin_max_size, arch)
+        min_min_size, min_max_size = calc_malloc_size(bin_min_size, config)
+        max_min_size, max_max_size = calc_malloc_size(bin_max_size, config)
 
         bin_min_size = min_min_size
         bin_max_size = max_max_size
@@ -371,7 +379,11 @@ def chunk_2_malloc_size(
         logger.warning(ex)
         return
 
-    print("0x%x 0x%x-0x%x" % (chunk_size, min_size, max_size))
+    print(
+        "chunk: %d 0x%x malloc: %d-%d 0x%x-0x%x" % (
+            chunk_size, chunk_size, min_size, max_size, min_size, max_size
+        )
+    )
 
 
 def calc_malloc_size(
@@ -422,7 +434,12 @@ def malloc_2_chunk_size(
         malloc_size,
         config=config,
     )
-    print("0x%x 0x%x" % (malloc_size, chunk_size))
+
+    print(
+        "malloc: %d 0x%x chunk: %d 0x%x" % (
+            malloc_size, malloc_size, chunk_size, chunk_size
+        )
+    )
 
 
 def calc_chunk_size(
