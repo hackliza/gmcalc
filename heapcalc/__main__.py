@@ -161,11 +161,38 @@ def parse_args():
     )
 
     s2b_parser.add_argument(
-        "-a", "--arch",
+        "-n", "--no-x86",
+        help="Indicates that architecture is not x86",
+        action="store_true",
+    )
+
+    s2b_parser.add_argument(
+        "-b", "--bits",
         choices=[32, 64],
         type=int,
         default=64,
-        help="Architecture of the program."
+        help="Bits of the program."
+    )
+
+    s2b_parser.add_argument(
+        "-g", "--glibc",
+        type=int,
+        default=19,
+        help="Minor version of the glibc 2."
+    )
+
+    s2b_parser.add_argument(
+        "-m", "--malloc",
+        action="store_true",
+        help="Display malloc size instead of chunk size.",
+        dest="use_malloc_size",
+    )
+
+    s2b_parser.add_argument(
+        "-v",
+        help="Verbosity",
+        action="count",
+        default=0
     )
 
     args = parser.parse_args()
@@ -222,6 +249,13 @@ def main():
         targets = args.bin
         command_func = partial(
             bin_2_chunk_size,
+            config=config,
+            use_malloc_size=args.use_malloc_size,
+        )
+    elif args.command == "s2b":
+        targets = args.size
+        command_func = partial(
+            size_2_bins,
             config=config,
             use_malloc_size=args.use_malloc_size,
         )
@@ -461,38 +495,68 @@ def calc_chunk_size(
     return max(chunk_size, config.min_chunk_size)
 
 
-def size_2_bins(chunk_size: int, arch: int):
-    size_mul = arch//32
-    min_size = 0x10 * size_mul
+def size_2_bins(size: int, config: HeapConfig, use_malloc_size: bool):
+    try:
+        size = dec_or_hex_int(size)
 
-    if chunk_size < min_size:
-        raise ValueError(
-            "Invalid chunk size 0x%x for arch %d: Too small" % (
-                chunk_size, arch
+        if use_malloc_size:
+            chunk_size = calc_chunk_size(size, config)
+        else:
+            chunk_size = remove_chunk_size_flags(size)
+
+        if chunk_size < config.min_chunk_size:
+            raise ValueError(
+                "Invalid chunk size 0x%x for %d bits: Too small" % (
+                    chunk_size, config.bits
+                )
             )
-        )
+    except ValueError as ex:
+        logger.warning(ex)
+        return
 
-    chunk_size = remove_chunk_size_flags(chunk_size)
+    small_index = (chunk_size - config.min_chunk_size) // config.align + 1
+    bins = []
+    if is_size_in_tcache(chunk_size, config):
+        bins.append("tcache[%d]" % small_index)
 
-    bins_indexes = []
-    small_index = (chunk_size - min_size)//0x10
+    if is_size_in_fastbin(chunk_size, config):
+        bins.append("fastbin[%d]" % small_index)
 
-    if is_size_in_tcache(chunk_size, arch):
-        bins_indexes.append("tcache %d" % small_index)
+    if is_size_in_small_bin(chunk_size, config):
+        bins.append("small[%d](bins[%d])" % (small_index, small_index + 1))
 
-    pass
+    elif is_size_in_large_bin(chunk_size, config):
+        bins.append("large[??]")
+
+    if chunk_size > 0x20000:
+        bins.append("mmap")
+
+    print("chunk: 0x%x bins: %s" % (chunk_size, " ".join(bins)))
 
 
-def is_size_in_fastbin(size: int, arch: int) -> bool:
-    min_size = arch//2
-    max_size = min_size + 0x10 * 9
-    return min_size <= size <= max_size
+def is_size_in_fastbin(size: int, config: HeapConfig) -> bool:
+    max_size = config.min_chunk_size + config.align * 9
+    return config.min_chunk_size <= size <= max_size
 
 
-def is_size_in_tcache(size: int, arch: int) -> bool:
-    min_size = arch//2
-    max_size = min_size + 0x10 * 63
-    return min_size <= size <= max_size
+def is_size_in_tcache(size: int, config: HeapConfig) -> bool:
+    if config.libc_version < 26:
+        return False
+
+    max_size = config.min_chunk_size + config.align * 63
+    return config.min_chunk_size <= size <= max_size
+
+
+def is_size_in_small_bin(size: int, config: HeapConfig) -> bool:
+    max_size = config.min_chunk_size + \
+        config.align * (config.small_bins_count - 1)
+    return config.min_chunk_size <= size <= max_size
+
+
+def is_size_in_large_bin(size: int, config: HeapConfig) -> bool:
+    min_size = config.min_chunk_size + \
+        config.align * config.small_bins_count
+    return min_size <= size <= 0x100000
 
 
 def init_log(verbosity=0, log_file=None):
