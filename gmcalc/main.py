@@ -11,7 +11,8 @@ logger = logging.getLogger(__name__)
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Calculate the real size of a chunk allocated with malloc"
+        description="Calculate the real size of a chunk allocated with malloc",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     cmd_parsers = parser.add_subparsers()
     cmd_parsers.required = True
@@ -19,7 +20,8 @@ def parse_args():
 
     m2c_parser = cmd_parsers.add_parser(
         "m2c",
-        help="Malloc size to Chunk size"
+        help="Malloc size to Chunk size",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
     m2c_parser.add_argument(
@@ -58,7 +60,8 @@ def parse_args():
 
     c2m_parser = cmd_parsers.add_parser(
         "c2m",
-        help="Chunk size to Malloc size range"
+        help="Chunk size to Malloc size range",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
     c2m_parser.add_argument(
@@ -98,6 +101,7 @@ def parse_args():
     b2s_parser = cmd_parsers.add_parser(
         "b2s",
         help="Gets the chunks size of a given bin",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
     b2s_parser.add_argument(
@@ -143,7 +147,8 @@ def parse_args():
 
     s2b_parser = cmd_parsers.add_parser(
         "s2b",
-        help="Indicates what bin corresponds to a chunk size."
+        help="Indicates what bin corresponds to a chunk size.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
     s2b_parser.add_argument(
@@ -224,6 +229,16 @@ def main():
         arch=args.arch,
         libc_version=args.glibc
     )
+
+    logger.info("glibc version: 2.%s", config.libc_version)
+    logger.info("bits: %s", config.bits)
+    logger.info("arch: %s", config.arch)
+    logger.info("align: %s", config.align)
+    logger.info("min chunk size: %s", config.min_chunk_size)
+    logger.info("small bins count: %s", config.small_bins_count)
+    logger.info("large bins count: %s", config.large_bins_count)
+    logger.info("fast bins count: %s", config.fastbins_count)
+    logger.info("tcaches count: %s", config.tcaches_count)
 
     if args.command == "c2m":
         targets = args.size
