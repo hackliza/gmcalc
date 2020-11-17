@@ -1,5 +1,7 @@
 
 X86 = "x86"
+COUNT_TCACHES = 64
+COUNT_FASTBINS = 10
 
 
 class HeapConfig:
@@ -24,3 +26,7 @@ class HeapConfig:
 
         self.large_bins_count = 126 - self.small_bins_count - 1
         self.start_large_index = self.small_bins_count + 2
+
+        self.tcaches_count = COUNT_TCACHES
+        self.fastbins_count = COUNT_FASTBINS
+        self.double_bins_count = 126

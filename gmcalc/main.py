@@ -8,14 +8,6 @@ from .large_bins import calc_large_bin_size, calc_large_bin_index
 
 logger = logging.getLogger(__name__)
 
-COUNT_TCACHES = 64
-COUNT_FASTBINS = 10
-COUNT_SMALL_BINS_32 = 63
-COUNT_SMALL_BINS_64 = 62
-COUNT_LARGE_BINS_32 = 63
-COUNT_LARGE_BINS_64 = 64
-COUNT_DOUBLE_BINS = 127
-
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -220,7 +212,7 @@ def dec_or_hex_int(v: str):
 
         return int(v)
     except ValueError:
-        raise ValueError("'%s' is not decimal or hex")
+        raise ValueError("'%s' is not decimal or hex" % v)
 
 
 def main():
@@ -281,73 +273,118 @@ def bin_2_chunk_size(
         min_size = config.min_chunk_size
         bin_min_size = min_size + config.align * (bin_index - 1)
         bin_max_size = bin_min_size
+        bin_name = "%s[%d]" % (bin_type, bin_index)
+
+        if bin_type == "small":
+            bin_name += "(bins[%d])" % (bin_index + 1)
 
     elif bin_type == "large":
         bin_min_size, bin_max_size = calc_large_bin_size(bin_index, config)
+        bin_name = "large[%d](bins[%d])" % (
+            bin_index, bin_index + config.start_large_index - 1)
 
     elif bin_type == "unsorted":
-        print("%s 0x400-???" % (bin_id))
-        return
+        bin_name = "unsorted(bins[1])"
+        bin_min_size = config.min_chunk_size
+        bin_max_size = -1
     else:
         raise NotImplementedError("Unreachable code: bin type '%s'" % bin_type)
 
-    if use_malloc_size:
-        min_min_size, min_max_size = calc_malloc_size(bin_min_size, config)
-        max_min_size, max_max_size = calc_malloc_size(bin_max_size, config)
+    if bin_min_size == -1:
+        malloc_min_size = bin_min_size = "??"
+    else:
+        malloc_min_size, _ = calc_malloc_size(bin_min_size, config)
+        malloc_min_size = "0x%x" % malloc_min_size
+        bin_min_size = "0x%x" % bin_min_size
 
-        bin_min_size = min_min_size
-        bin_max_size = max_max_size
+    if bin_max_size == -1:
+        malloc_max_size = bin_max_size = "??"
+    else:
+        _, malloc_max_size = calc_malloc_size(bin_max_size, config)
+        malloc_max_size = "0x%x" % malloc_max_size
+        bin_max_size = "0x%x" % bin_max_size
 
     if bin_min_size == bin_max_size:
-        print("%s 0x%x" % (bin_id, bin_min_size))
+        chunk_str = "chunk: %s" % bin_min_size
     else:
-        print("%s 0x%x-0x%x" % (bin_id, bin_min_size, bin_max_size))
+        chunk_str = "chunk: %s-%s" % (bin_min_size, bin_max_size)
+
+    malloc_str = "malloc: %s-%s" % (malloc_min_size, malloc_max_size)
+
+    print("bin: %s %s %s" % (bin_name, chunk_str, malloc_str))
 
 
 def parse_bin_id(
         bin_id: str,
         config: HeapConfig,
 ) -> (str, int):
-    if bin_id == "u":
+    bin_id = bin_id.lower()
+
+    if bin_id == "u" or bin_id == "unsorted":
         return "unsorted", 0
 
+    bins_desc = [
+        {
+            "name": "small",
+            "prefix": ["small", "s"],
+            "count": config.small_bins_count,
+        },
+        {
+            "name": "large",
+            "prefix": ["large", "l"],
+            "count": config.large_bins_count,
+        },
+        {
+            "name": "fast",
+            "prefix": ["fastbin", "fast", "f"],
+            "count": config.fastbins_count,
+        },
+        {
+            "name": "tcache",
+            "prefix": ["tcache", "t"],
+            "count": config.tcaches_count,
+        },
+        {
+            "name": "bin",
+            "prefix": ["bins", "bin", "b"],
+            "count": config.double_bins_count,
+        }
+    ]
+
     try:
-        if bin_id.startswith("s"):
-            bin_index = _parse_bin_index(bin_id[1:], config.small_bins_count)
-            return "small", bin_index
+        for bin_desc in bins_desc:
+            for prefix in bin_desc["prefix"]:
+                if bin_id.startswith(prefix):
+                    bin_index = bin_id[len(prefix):]
 
-        elif bin_id.startswith("l"):
-            bin_index = _parse_bin_index(bin_id[1:], config.large_bins_count)
-            return "large", bin_index
+                    # to allow formats like large[4] or small:1
+                    bin_index = bin_index.lstrip(":[").rstrip("]")
 
-        elif bin_id.startswith("b"):
-            bin_index = _parse_bin_index(bin_id[1:], COUNT_DOUBLE_BINS)
+                    bin_index = _parse_bin_index(
+                        bin_index,
+                        bin_desc["count"]
+                    )
+                    if bin_desc["name"] != "bin":
+                        return bin_desc["name"], bin_index
 
-            if bin_index == 1:
-                return "unsorted", 0
-            elif bin_index < config.start_large_index:
-                return "small", bin_index - 1
-            else:
-                return "large", bin_index - config.start_large_index + 1
+                    if bin_index == 1:
+                        return "unsorted", 0
+                    elif bin_index < config.start_large_index:
+                        return "small", bin_index - 1
+                    else:
+                        return "large", bin_index - \
+                            config.start_large_index + 1
 
-        elif bin_id.startswith("f"):
-            bin_index = _parse_bin_index(bin_id[1:], COUNT_FASTBINS)
-            return "fast", bin_index
-
-        elif bin_id.startswith("t"):
-            bin_index = _parse_bin_index(bin_id[1:], COUNT_TCACHES)
-            return "tcache", bin_index
-
-    except ValueError:
-        raise ValueError("Invalid bin '%s'" % bin_id)
+    except ValueError as ex:
+        raise ValueError("Invalid bin '%s': %s" % (bin_id, ex))
 
     raise ValueError("Unknown bin '%s'" % bin_id)
 
 
 def _parse_bin_index(bin_index: str, max_index: int):
-    bin_index = int(bin_index)
+    bin_index = dec_or_hex_int(bin_index)
     if bin_index < 1 or bin_index > max_index:
-        raise ValueError()
+        raise ValueError("Index must be in range 1-%d" % (max_index))
 
     return bin_index
 
@@ -377,22 +414,8 @@ def calc_malloc_size(
         chunk_size: int,
         config: HeapConfig,
 ) -> (int, int):
-
-    if chunk_size < config.min_chunk_size:
-        raise ValueError(
-            "Invalid chunk size 0x%x for %d bits: Too small" % (
-                chunk_size, config.bits
-            )
-        )
-
     chunk_size = remove_chunk_size_flags(chunk_size)
-
-    if chunk_size % config.align != 0:
-        raise ValueError(
-            "Invalid chunk size 0x%x: Not aligned with %d" % (
-                chunk_size, config.align
-            )
-        )
+    check_chunk_size(chunk_size, config)
 
     max_size = chunk_size - (config.bits//8)
     min_size = max_size - (config.align - 1)
@@ -401,6 +424,22 @@ def calc_malloc_size(
         min_size = 0
 
     return min_size, max_size
+
+
+def check_chunk_size(chunk_size: int, config: HeapConfig):
+    if chunk_size < config.min_chunk_size:
+        raise ValueError(
+            "Size 0x%x is too small for %d bits. Min is 0x%x." % (
+                chunk_size, config.bits, config.min_chunk_size
+            )
+        )
+
+    if chunk_size % config.align != 0:
+        raise ValueError(
+            "Invalid chunk size 0x%x: Not aligned with %d" % (
+                chunk_size, config.align
+            )
+        )
 
 
 def remove_chunk_size_flags(chunk_size: int) -> int:
@@ -457,12 +496,8 @@ def size_2_bins(size: int, config: HeapConfig, use_malloc_size: bool):
         else:
             chunk_size = remove_chunk_size_flags(size)
 
-        if chunk_size < config.min_chunk_size:
-            raise ValueError(
-                "Invalid chunk size 0x%x for %d bits: Too small" % (
-                    chunk_size, config.bits
-                )
-            )
+        check_chunk_size(chunk_size, config)
+
     except ValueError as ex:
         logger.warning(ex)
         return
