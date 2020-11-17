@@ -29,7 +29,7 @@ pip3 install gmcalc
 
 From repo:
 ```
-git clone ...
+git clone https://github.com/hackliza/gmcalc
 cd gmcalc/
 pip install .
 ```
