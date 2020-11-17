@@ -3,14 +3,29 @@ from .heap_config import HeapConfig
 
 def calc_large_bin_size(index: int, config: HeapConfig) -> (int, int):
     bins_index = config.start_large_index + index - 1
+    large_bins = get_large_bins(config)
+    return large_bins[bins_index]
 
+
+def calc_large_bin_index(size: int, config: HeapConfig) -> int:
+    large_bins = get_large_bins(config)
+
+    for k, v in large_bins.items():
+        min_size, max_size = v
+        if min_size <= size <= max_size:
+            return k
+
+    return 126
+
+
+def get_large_bins(config: HeapConfig) -> dict:
     if config.bits == 64:
-        return large_bins_64[bins_index]
+        return large_bins_64
 
     if config.align == 16:
-        return large_bins_32_16[bins_index]
+        return large_bins_32_16
 
-    return large_bins_32_8[bins_index]
+    return large_bins_32_8
 
 
 large_bins_64 = {

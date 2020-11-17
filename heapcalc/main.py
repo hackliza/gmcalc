@@ -4,7 +4,7 @@ from typing import Any, Iterator, Optional
 import logging
 from functools import partial
 from .heap_config import HeapConfig, X86
-from .large_bins import calc_large_bin_size
+from .large_bins import calc_large_bin_size, calc_large_bin_index
 
 logger = logging.getLogger(__name__)
 
@@ -285,6 +285,9 @@ def bin_2_chunk_size(
     elif bin_type == "large":
         bin_min_size, bin_max_size = calc_large_bin_size(bin_index, config)
 
+    elif bin_type == "unsorted":
+        print("%s 0x400-???" % (bin_id))
+        return
     else:
         raise NotImplementedError("Unreachable code: bin type '%s'" % bin_type)
 
@@ -305,6 +308,9 @@ def parse_bin_id(
         bin_id: str,
         config: HeapConfig,
 ) -> (str, int):
+    if bin_id == "u":
+        return "unsorted", 0
+
     try:
         if bin_id.startswith("s"):
             bin_index = _parse_bin_index(bin_id[1:], config.small_bins_count)
@@ -472,8 +478,10 @@ def size_2_bins(size: int, config: HeapConfig, use_malloc_size: bool):
     if is_size_in_small_bin(chunk_size, config):
         bins.append("small[%d](bins[%d])" % (small_index, small_index + 1))
 
-    elif is_size_in_large_bin(chunk_size, config):
-        bins.append("large[??]")
+    else:
+        bins_index = calc_large_bin_index(chunk_size, config)
+        bins.append("large[%d](bins[%d])" % (
+            bins_index - config.start_large_index, bins_index))
 
     if chunk_size >= 0x20000:
         bins.append("mmap")
@@ -498,12 +506,6 @@ def is_size_in_small_bin(size: int, config: HeapConfig) -> bool:
     max_size = config.min_chunk_size + \
         config.align * (config.small_bins_count - 1)
     return config.min_chunk_size <= size <= max_size
-
-
-def is_size_in_large_bin(size: int, config: HeapConfig) -> bool:
-    min_size = config.min_chunk_size + \
-        config.align * config.small_bins_count
-    return min_size <= size <= 0x100000
 
 
 def init_log(verbosity=0, log_file=None):
