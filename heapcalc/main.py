@@ -3,6 +3,8 @@ import sys
 from typing import Any, Iterator, Optional
 import logging
 from functools import partial
+from .heap_config import HeapConfig, X86
+from .large_bins import calc_large_bin_size
 
 logger = logging.getLogger(__name__)
 
@@ -13,8 +15,6 @@ COUNT_SMALL_BINS_64 = 62
 COUNT_LARGE_BINS_32 = 63
 COUNT_LARGE_BINS_64 = 64
 COUNT_DOUBLE_BINS = 127
-
-X86 = "x86"
 
 
 def parse_args():
@@ -266,30 +266,6 @@ def main():
         command_func(target)
 
 
-class HeapConfig:
-
-    def __init__(self, bits, arch, libc_version):
-        self.bits = bits
-        self.arch = arch
-        self.libc_version = libc_version
-
-        if bits == 64:
-            self.align = 16
-            self.small_bins_count = 62
-        else:
-            if arch == X86 and libc_version >= 26:
-                self.align = 16
-                self.small_bins_count = 63
-            else:
-                self.align = 8
-                self.small_bins_count = 62
-
-        self.min_chunk_size = bits//2
-
-        self.large_bins_count = 126 - self.small_bins_count
-        self.start_large_index = self.small_bins_count + 2
-
-
 def bin_2_chunk_size(
         bin_id: str,
         config: HeapConfig,
@@ -307,34 +283,8 @@ def bin_2_chunk_size(
         bin_max_size = bin_min_size
 
     elif bin_type == "large":
-        # range 64 bytes
-        if bin_index < 34:
-            min_size = 0x400
-            bin_min_size = min_size + 0x40 * (bin_index - 1)
-            bin_max_size = bin_min_size + 0x30
+        bin_min_size, bin_max_size = calc_large_bin_size(bin_index, config)
 
-        elif bin_index == 34:
-            bin_min_size = 0xc40
-            bin_max_size = 0xdf0
-        elif bin_index < 49:
-            min_size = 0xe00
-            bin_min_size = min_size + 0x200 * (bin_index - 35)
-            bin_max_size = bin_min_size + 0x1f0
-        elif bin_index < 57:
-            min_size = 0x2a00
-            bin_min_size = min_size + 0x1000 * (bin_index - 49)
-            bin_max_size = bin_min_size + 0xff0
-        elif bin_index == 57:
-            bin_min_size = 0xaa00
-            bin_max_size = bin_min_size + 0x6000 - 0x10
-        else:
-            min_size = 0x10a00
-            bin_min_size = min_size + 0x8000 * (bin_index - 58)
-            bin_max_size = bin_min_size + 0x7ff0
-
-    elif bin_type == "unsorted":
-        print("%s 0x400-???" % (bin_id))
-        return
     else:
         raise NotImplementedError("Unreachable code: bin type '%s'" % bin_type)
 
@@ -355,9 +305,6 @@ def parse_bin_id(
         bin_id: str,
         config: HeapConfig,
 ) -> (str, int):
-    if bin_id == "u":
-        return "unsorted", 0
-
     try:
         if bin_id.startswith("s"):
             bin_index = _parse_bin_index(bin_id[1:], config.small_bins_count)
@@ -528,7 +475,7 @@ def size_2_bins(size: int, config: HeapConfig, use_malloc_size: bool):
     elif is_size_in_large_bin(chunk_size, config):
         bins.append("large[??]")
 
-    if chunk_size > 0x20000:
+    if chunk_size >= 0x20000:
         bins.append("mmap")
 
     print("chunk: 0x%x bins: %s" % (chunk_size, " ".join(bins)))
