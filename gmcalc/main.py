@@ -46,9 +46,10 @@ def parse_args():
 
     m2c_parser.add_argument(
         "-g", "--glibc",
-        type=int,
+        metavar="VERSION",
+        type=glibc_version,
         default=19,
-        help="Minor version of the glibc 2."
+        help="Version of the glibc 2. e.g: 19, 2.19"
     )
 
     m2c_parser.add_argument(
@@ -86,9 +87,10 @@ def parse_args():
 
     c2m_parser.add_argument(
         "-g", "--glibc",
-        type=int,
+        metavar="VERSION",
+        type=glibc_version,
         default=19,
-        help="Minor version of the glibc 2."
+        help="Version of the glibc 2. e.g: 19, 2.19"
     )
 
     c2m_parser.add_argument(
@@ -126,9 +128,10 @@ def parse_args():
 
     b2s_parser.add_argument(
         "-g", "--glibc",
-        type=int,
+        metavar="VERSION",
+        type=glibc_version,
         default=19,
-        help="Minor version of the glibc 2."
+        help="Version of the glibc 2. e.g: 19, 2.19"
     )
 
     b2s_parser.add_argument(
@@ -173,9 +176,10 @@ def parse_args():
 
     s2b_parser.add_argument(
         "-g", "--glibc",
-        type=int,
+        metavar="VERSION",
+        type=glibc_version,
         default=19,
-        help="Minor version of the glibc 2."
+        help="Version of the glibc 2. e.g: 19, 2.19"
     )
 
     s2b_parser.add_argument(
@@ -208,6 +212,15 @@ def parse_args():
         args.arch = X86
 
     return args
+
+
+def glibc_version(v: str):
+    versions = v.split(".")
+
+    if len(versions) == 1:
+        return int(versions[0])
+
+    return int(versions[1])
 
 
 def dec_or_hex_int(v: str):
