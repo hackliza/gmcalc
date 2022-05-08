@@ -1,6 +1,6 @@
 import argparse
 import sys
-from typing import Any, Iterator, Optional
+from typing import Any, Iterator, Optional,Tuple
 import logging
 from functools import partial
 from .heap_config import HeapConfig, X86
@@ -345,7 +345,7 @@ def bin_2_chunk_size(
 def parse_bin_id(
         bin_id: str,
         config: HeapConfig,
-) -> (str, int):
+) -> Tuple[str, int]:
     bin_id = bin_id.lower()
 
     if bin_id == "u" or bin_id == "unsorted":
@@ -441,7 +441,7 @@ def chunk_2_malloc_size(
 def calc_malloc_size(
         chunk_size: int,
         config: HeapConfig,
-) -> (int, int):
+) -> Tuple[int, int]:
     chunk_size = remove_chunk_size_flags(chunk_size)
     check_chunk_size(chunk_size, config)
 
